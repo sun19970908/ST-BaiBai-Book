@@ -9,7 +9,7 @@
  * 标签**留在正文里**(发副 API、发主模型续写都带着),只用 ST 正则在「显示层」隐藏 —— 真删会让时间再次失同步。
  */
 
-import { apiSettings } from '@/api/settings';
+import { apiSettings, SUMMARY_RULE_DEFAULTS } from '@/api/settings';
 import { getContext, type STMessage } from '@/st/context';
 import { stripBaiBaiImageTags } from './imageTag';
 import type { LeafExtra } from './types';
@@ -71,6 +71,49 @@ export function parseTimeRange(mes: string): { start?: string; end?: string } {
   const start = s.match(RE_START)?.[1]?.trim() || undefined;
   const end = s.match(RE_END)?.[1]?.trim() || undefined;
   return { start, end };
+}
+
+/* —— 摘要标签提取(规则包可配:tag/timeRegex/summaryRegex,见 settings 的 SummaryExtractRule) —— */
+
+/** 编译用户正则;失败返回 null(调用方回退默认/按没写处理)。 */
+function compileUserRegex(src: string, flags: string): RegExp | null {
+  try {
+    return new RegExp(src, flags);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 按当前规则包提取正文里的摘要:定位 <tag>…</tag> 内文(剥思维链,多条取第一段)→
+ * timeRegex 取时间(第1捕获组,命中的整段同时从内文删掉)→ summaryRegex 非空时取其
+ * 第1捕获组(无组取整段匹配)当摘要,空则内文整块。无标签返回 null,取不到时间为空串。
+ * 标签名做正则元字符转义;用户正则编译失败:timeRegex 回退默认,summaryRegex 按没写处理。
+ */
+export function extractSummaryTag(mes: string): { text: string; time: string } | null {
+  const rule = apiSettings.summaryRule ?? SUMMARY_RULE_DEFAULTS;
+  const tag = (rule.tag.trim() || SUMMARY_RULE_DEFAULTS.tag).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const inner = stripThinkBlocks(String(mes ?? ''))
+    .match(new RegExp(`<${tag}\\b[^>]*>([\\s\\S]*?)</${tag}>`, 'i'))?.[1]
+    ?.trim();
+  if (!inner) return null;
+
+  let text = inner;
+  let time = '';
+  const timeRe = compileUserRegex(rule.timeRegex, 'm') ?? compileUserRegex(SUMMARY_RULE_DEFAULTS.timeRegex, 'm');
+  if (timeRe) {
+    const m = text.match(timeRe);
+    if (m?.[1] && m.index !== undefined) {
+      time = m[1].trim();
+      text = (text.slice(0, m.index) + text.slice(m.index + m[0].length)).trim();
+    }
+  }
+  const sumRe = rule.summaryRegex.trim() ? compileUserRegex(rule.summaryRegex, 'm') : null;
+  if (sumRe) {
+    const m = text.match(sumRe);
+    if (m) text = (m[1] ?? m[0]).trim() || text;
+  }
+  return { text, time };
 }
 
 /**

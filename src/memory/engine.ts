@@ -9,7 +9,7 @@ import { addSummary, classifyNpcPresence, deriveMemory, finalizeDelta, fmtVarOps
 import { extractJsonObject } from './json';
 import { clearInjection, refreshInjection, renderHistoryNodes, selectHistoryNodesBefore } from './inject';
 import { buildBatchSummaryPrompt, buildBatchThinking, buildCharCardSystem, buildPersonaSystem, buildResummaryPrompt, buildSummaryPrompt, buildSummaryThinking, buildWorldInfoSystem, fmtItemLogInline, JAILBREAK_PROMPT, RESUMMARY_THINKING_CHECKLIST, RESUMMARY_THINKING_PREFILL, selectRecentResolvedPlans } from './prompts';
-import { clampToTimeTags, cleanBody, parseTimeRange, syncTimeTagRegex, writeItemLogTag, writeVarLogTag } from './timeTag';
+import { clampToTimeTags, cleanBody, extractSummaryTag, parseTimeRange, syncTimeTagRegex, writeItemLogTag, writeVarLogTag } from './timeTag';
 import { renderSourceHints, type SourceExcerpt } from './sourceHints';
 import { memory, recomputeDerived, scheduleLeafFlush } from './store';
 import type { LeafExtra, SummaryDelta } from './types';
@@ -1232,6 +1232,20 @@ async function runSummaryInner(aiFloor: number, options: RunSummaryOptions = {})
     engineState.lastError = `重新摘要失败:楼层 #${aiFloor} 的原摘要已发生变化`;
     return;
   }
+  // 正文带 <anusa_summary> → 直接提取当摘要,不调副API;无标签 → 留待摘,也不调
+  const tag = extractSummaryTag(chat[aiFloor].mes);
+  if (tag) {
+    busy = true; engineState.running = true; engineState.lastError = '';
+    applyLeafForFloor(chat, aiFloor,
+      { summary: tag.text, time: tag.time || undefined, timeStart: tag.time || undefined, timeEnd: tag.time || undefined },
+      deriveMemory(chat, aiFloor));
+    engineState.lastRunAt = Date.now();
+    recomputeDerived(); refreshInjection(); scheduleLeafFlush(); scheduleVectorIndex();
+    await checkResummary();
+    busy = false; engineState.running = false;
+    return;
+  }
+  return; // 无标签:留待摘
   console.log('[柏宝书] runSummary 即将发请求,', sender.label);
 
   busy = true;

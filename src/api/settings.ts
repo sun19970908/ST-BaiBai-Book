@@ -255,11 +255,30 @@ export interface ApiSettings {
    * 旁注等格式。改动对**召回时**即时生效(向量库存的是原文,召回再清洗),无需重建索引。
    */
   customStripTags: string[];
+  /** 摘要提取规则包:从正文标签直接提取摘要(不调副API)。tag=标签名;timeRegex 取时间(第1捕获组,命中段同时从内文删);summaryRegex 取摘要文本(空=内文删时间行后整块)。默认值=内置 anusa_summary 行为。 */
+  summaryRule: SummaryExtractRule;
   /** 全局变量模板:所有角色所有聊天共享的初始 JSON 结构 + 说明(值仍每聊天独立)。见 memory 的 VarTier。 */
   varsGlobalTemplate: VarTemplate;
   /** 角色变量模板:键=角色卡 avatar 文件名,值=该角色所有聊天共享的初始模板(值仍每聊天独立)。 */
   varsTemplateByChar: Record<string, VarTemplate>;
 }
+
+/** 摘要提取规则包(可配置):从正文标签直接提取摘要,不调副API。三个字段都是源码字符串形式。 */
+export interface SummaryExtractRule {
+  /** 摘要标签名(不带尖括号),拼成 <tag>…</tag> 配对正则定位内文;留空回退默认 */
+  tag: string;
+  /** 时间提取正则(m 标志,在内文里跑):第1捕获组=时间,写入叶子 timeStart/timeEnd;命中的整段同时从内文删掉。编译失败回退默认。 */
+  timeRegex: string;
+  /** 摘要提取正则(m 标志,在删完时间段的内文里跑):第1捕获组=摘要文本,无组则取整段匹配;留空=内文整块。编译失败按没写处理。跨行匹配请用 [\s\S](`.` 不跨行)。 */
+  summaryRegex: string;
+}
+
+/** 摘要提取规则默认值 = 内置 anusa_summary 行为(timeTag 编译失败/字段缺失时也回退到这里)。 */
+export const SUMMARY_RULE_DEFAULTS: SummaryExtractRule = {
+  tag: 'anusa_summary',
+  timeRegex: '^[ \\t]*时间\\s*[：:][ \\t]*(.+)$',
+  summaryRegex: '',
+};
 
 // extension_settings 里的命名空间键;localStorage 是旧版残留,仅用于一次性迁移。
 const SETTINGS_KEY = 'baibai_book';
@@ -369,6 +388,7 @@ function defaults(): ApiSettings {
     batchMaxChars: 30000,
     batchMaxFloors: 10,
     customStripTags: [],
+    summaryRule: { ...SUMMARY_RULE_DEFAULTS },
     varsGlobalTemplate: { json: {}, meaning: '', rule: '' },
     varsTemplateByChar: {},
   };
@@ -430,6 +450,13 @@ function normalize(raw: unknown): ApiSettings {
     npcAffinity: typeof ri.npcAffinity === 'boolean' ? ri.npcAffinity : true,
     items: typeof ri.items === 'boolean' ? ri.items : true,
     scenes: typeof ri.scenes === 'boolean' ? ri.scenes : true,
+  };
+  // 摘要提取规则:嵌套对象逐字段兜底(老数据无此键 → 全回退默认 = anusa 行为不变);tag 去空白
+  const rs = ((raw as Partial<ApiSettings>).summaryRule ?? {}) as Partial<SummaryExtractRule>;
+  merged.summaryRule = {
+    tag: typeof rs.tag === 'string' && rs.tag.trim() ? rs.tag.trim() : SUMMARY_RULE_DEFAULTS.tag,
+    timeRegex: typeof rs.timeRegex === 'string' ? rs.timeRegex : SUMMARY_RULE_DEFAULTS.timeRegex,
+    summaryRegex: typeof rs.summaryRegex === 'string' ? rs.summaryRegex : SUMMARY_RULE_DEFAULTS.summaryRegex,
   };
   // vector 同为嵌套对象(且内含子对象),逐层兜底,老数据缺字段时回退默认。
   // 注:旧结构曾有 vector.channels + {channel,model};扁平化后弃用,逐角色按 url/key/model 兜底,
@@ -624,6 +651,7 @@ function applyInto(target: ApiSettings, src: ApiSettings): void {
   target.batchMaxChars = src.batchMaxChars;
   target.batchMaxFloors = src.batchMaxFloors;
   target.customStripTags = src.customStripTags;
+  target.summaryRule = src.summaryRule;
   target.varsGlobalTemplate = src.varsGlobalTemplate;
   target.varsTemplateByChar = src.varsTemplateByChar;
 }
