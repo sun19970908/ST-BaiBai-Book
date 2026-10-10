@@ -482,7 +482,7 @@ async function runCarryover() {
   }
 }
 
-/* —— 从旧版 Horae 迁移 —— */
+/* —— 从 Horae 迁移 —— */
 const migrating = ref(false);
 const migrateMsg = ref('');
 const migrateConfirmOpen = ref(false);
@@ -1328,21 +1328,6 @@ function exportPublicApiDocument() {
             </label>
           </div>
 
-          <!-- 破限:仅 Query 重写(三角色里只有它生成文本)。 -->
-          <template v-if="role.key === 'queryRewrite'">
-            <label class="bbs-switch-row">
-              <span class="bbs-field-label">启用破限</span>
-              <input
-                v-model="apiSettings.vector.queryRewriteJailbreak"
-                type="checkbox"
-                class="bbs-checkbox"
-                :disabled="!apiSettings.vector.enabled"
-              />
-            </label>
-            <p class="bbs-field-hint">
-              使用 Gemini 等模型作为重写模型时,开启这个选项,并把最大 Token 改为 65535。
-            </p>
-          </template>
           </div>
             </div>
           </div>
@@ -1591,8 +1576,8 @@ function exportPublicApiDocument() {
         <p v-if="carryMsg" class="bbs-field-hint">{{ carryMsg }}</p>
       </Collapsible>
 
-      <!-- 从旧版 Horae 迁移 -->
-      <Collapsible title="从旧版 Horae 迁移" :open="false">
+      <!-- 从 Horae 迁移 -->
+      <Collapsible title="从 Horae 迁移" :open="false">
         <p class="bbs-field-hint">
           把当前聊天里旧版 Horae 的摘要、物品、计划迁移过来。需要迁移的聊天各点一次,不会动 Horae 原数据。
         </p>
@@ -1666,7 +1651,7 @@ function exportPublicApiDocument() {
     </ConfirmDialog>
     <ConfirmDialog
       v-model:open="migrateConfirmOpen"
-      title="从旧版 Horae 迁移"
+      title="从 Horae 迁移"
       confirm-text="开始迁移"
       @confirm="runMigrate"
     >
@@ -1777,11 +1762,6 @@ function exportPublicApiDocument() {
           <span class="bbs-modal-label">流式传输</span>
           <input v-model="editingChannel.stream" type="checkbox" class="bbs-checkbox" />
         </label>
-        <label class="bbs-switch-row">
-          <span class="bbs-modal-label">发送预填充</span>
-          <input v-model="editingChannel.prefill" type="checkbox" class="bbs-checkbox" />
-        </label>
-        <span class="bbs-field-hint">默认开。若副 API 报错信息里出现 prefill 字样,关掉它即可。</span>
         <label class="bbs-modal-field">
           <span class="bbs-modal-label">排除参数</span>
           <input

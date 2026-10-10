@@ -26,6 +26,8 @@ import { fetchWithTimeoutRetry } from './embed';
 
 /** rewrite 模型最多取几条 query(对齐 Horae) */
 const MAX_QUERIES = 6;
+/** INTENT 描述限长(原版提示词要求 2–4 句话,这里给个宽松上限兜底,防极端返回) */
+const MAX_INTENT_LEN = 360;
 /** 单条 query 限长 */
 const MAX_QUERY_LEN = 220;
 
@@ -95,16 +97,13 @@ function buildMessages(chat: STMessage[]): ChatMsg[] {
   const windowStart = resolveKeepStart(chat);
   const cut = findSnapshotCut(chat, windowStart);
 
-  // 开头唯一 system:系统提示词 +(可选)历史剧情摘要,合并为一条,保证 system 只出现在开头
+  // 开头唯一 system:破限(NVWA 核心)+ 系统提示词 +(可选)历史剧情摘要,合并为一条,
+  // 既保证 system 只出现在开头,也让破限处于请求最前。核心不写进重写正文,统一由破限位提供
+  // (自定义优先,留空用内置 NVWA 核心)。
   const history = renderHistoryNodes(selectHistoryNodesBefore(memory.summaries, chat, windowStart));
-  let systemContent = history ? `${QUERY_REWRITE_SYSTEM}\n\n[历史剧情摘要]\n${history}` : QUERY_REWRITE_SYSTEM;
-  // 启用破限:把破限提示词置顶拼进开头这条唯一 system 的最前面。
-  // 不新增一条 system,以守住「system 仅允许出现在数组最开头」的渠道约束——拼进即等于「最开头 + system 身份」。
-  // 破限文本取自「自定义提示词 · 破限」,留空则回退内置默认(与摘要/总结两端同口径,见 engine.ts)。
-  if (apiSettings.vector.queryRewriteJailbreak) {
-    const jb = apiSettings.prompts.jailbreak.trim() || JAILBREAK_PROMPT;
-    if (jb) systemContent = `${jb}\n\n${systemContent}`;
-  }
+  const body = history ? `${QUERY_REWRITE_SYSTEM}\n\n[历史剧情摘要]\n${history}` : QUERY_REWRITE_SYSTEM;
+  const jb = apiSettings.prompts.jailbreak.trim() || JAILBREAK_PROMPT;
+  const systemContent = `${jb}\n\n${body}`;
   const messages: ChatMsg[] = [{ role: 'system', content: systemContent }];
 
   // 平铺窗口对话(纯 user/assistant),记录原 msgIndex 以定位快照插入点
@@ -180,7 +179,7 @@ function parseResponse(text: string): RewriteResult {
     const line = raw.replace(/^\s*(?:[-*•]\s*)?(?:\d+[.)、]\s*)?/, '').trim();
     const im = line.match(/^INTENT\s*[:：]\s*(.+)$/i);
     if (im) {
-      intent = sanitize(im[1]);
+      intent = sanitize(im[1], MAX_INTENT_LEN);
       continue;
     }
     const qm = line.match(/^Q\s*\d*\s*[:：]\s*(.+)$/i);
@@ -197,13 +196,13 @@ function parseResponse(text: string): RewriteResult {
   return { intent, queries };
 }
 
-function sanitize(text: string): string {
+function sanitize(text: string, maxLen = MAX_QUERY_LEN): string {
   return String(text || '')
     .trim()
     .replace(/^["'“”‘’`]+|["'“”‘’`]+$/g, '')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, MAX_QUERY_LEN);
+    .slice(0, maxLen);
 }
 
 /**

@@ -188,14 +188,7 @@ async function requestCompletionAtUrl(
   if (!channel.url || !channel.model) throw new ApiError('副 API 渠道未配置完整(缺 url 或 model)');
 
   const stream = channel.stream ?? false;
-  // 预填充开关(默认开):关闭时丢掉末尾那条 assistant 预填充消息。
-  // 摘要/批量请求会在末尾追加一条 assistant 预填充引导思维链;对不支持预填充(不续写)的端点
-  // 形同浪费、个别端点还要求「最后一条须为 user」。关掉只是不发它,思维链引导仍由 system 清单承担。
-  const outMessages =
-    channel.prefill === false && messages[messages.length - 1]?.role === 'assistant'
-      ? messages.slice(0, -1)
-      : messages;
-  const body = buildRequestBody(channel, outMessages, reverseProxy, stream);
+  const body = buildRequestBody(channel, messages, reverseProxy, stream);
 
   const timeoutSec = validTimeoutSec(channel.timeoutSec);
   return withTimeout(timeoutSec, opts.signal, '副 API 请求', async signal => {

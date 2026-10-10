@@ -13,6 +13,18 @@ import { apiSettings, SUMMARY_RULE_DEFAULTS } from '@/api/settings';
 import { getContext, type STMessage } from '@/st/context';
 import { stripBaiBaiImageTags } from './imageTag';
 import type { LeafExtra } from './types';
+// 旁注协议:说明旁注标签只读。时间标签不需要 NVWA 核心。
+import builtinProtocolsRaw from './prompts/builtin-protocols.txt?raw';
+
+/** 取 08 的 LEDGER_PROTOCOL 分节(旁注标签与正文分工)。 */
+const LEDGER_PROTOCOL = (() => {
+  const re = /^=====\s*LEDGER_PROTOCOL\s*=====\s*$/m;
+  const m = builtinProtocolsRaw.match(re);
+  if (!m || m.index === undefined) return '';
+  const rest = builtinProtocolsRaw.slice(m.index + m[0].length);
+  const next = rest.search(/^=====\s*.+?\s*=====\s*$/m);
+  return (next >= 0 ? rest.slice(0, next) : rest).trim();
+})();
 
 /** 标签固定标识(解析正则与隐藏正则都依赖它) */
 export const START_TAG = 'bbs_start';
@@ -53,7 +65,9 @@ export const TIME_TAG_PROMPT = `【时间锚点要求(系统强制)】
 ${RULE_COMPLETE_TIME_ANCHOR}
 
 【不需要输出的格式】
-私密简报里面的当前状态是记忆插件给你辅助了解前文的内容，而不是要求你在正文末尾输出的格式，在无论何时都不要在正文末尾输出私密简报`;
+私密简报里面的当前状态是记忆插件给你辅助了解前文的内容，而不是要求你在正文末尾输出的格式，在无论何时都不要在正文末尾输出私密简报
+
+${LEDGER_PROTOCOL}`;
 
 /** 当前生效的固定提示词(用户自定义优先,空则用内置默认)。 */
 export function timeTagPrompt(): string {

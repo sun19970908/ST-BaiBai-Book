@@ -13,8 +13,8 @@ export function extractJsonObject<T = unknown>(raw: string): T | null {
   // 未闭合的检查块可能只是被截断的草稿,不能把其中的 JSON 当成最终结果。
   if (/^<think(?:ing)?\b/i.test(s)) return null;
 
-  // assistant prefill 场景下,返回可能只包含续写的思维链正文 + </thinking> + JSON,
-  // 没有开头 <thinking>。此时丢弃最后一个闭合标签及其之前的全部文本。
+  // 容错:返回可能只含思维链正文 + </thinking> + JSON 而缺开头的 <thinking>,
+  // 此时丢弃最后一个闭合标签及其之前的全部文本。
   const danglingThinkClose = s.match(/<\/think(?:ing)?>/gi);
   if (danglingThinkClose) {
     const lastClose = Math.max(

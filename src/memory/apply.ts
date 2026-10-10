@@ -8,8 +8,9 @@ import { memory, recomputeDerived, saveMemory, scheduleLeafFlush } from './store
 import { readItemsTagText, writeItemLogTag, writeVarLogTag } from './timeTag';
 import { scheduleVectorIndex } from './vector';
 import { invalidateRecallCache } from './vector/cache';
+import { applyConditionPatch, hasConditionPatchContent } from './conditionPatch';
 import { createEmptyMemory } from './types';
-import type { BaibaiMemory, ItemDelta, ItemLogEntry, JsonValue, LeafExtra, LifeDetailAdd, LifeDetailUpdate, MemLifeDetail, MemNpc, MemPlan, MemScene, MemSummary, NpcAffinity, NpcDelta, NpcPresence, PlanResolveItem, ProtagonistDelta, SceneDelta, SceneFocus, SceneOp, SceneReparent, StoredDelta, SummaryDelta, VarOp, VarTemplate, VarTier } from './types';
+import type { BaibaiMemory, ConditionPatch, ConditionPatchOp, ItemDelta, ItemLogEntry, JsonValue, LeafExtra, LifeDetailAdd, LifeDetailUpdate, MemLifeDetail, MemNpc, MemPlan, MemScene, MemSummary, NpcAffinity, NpcDelta, NpcPresence, PlanResolveItem, PlanUpdateItem, ProtagonistDelta, SceneDelta, SceneFocus, SceneOp, SceneReparent, StoredDelta, SummaryDelta, VarOp, VarTemplate, VarTier } from './types';
 
 // 供既有调用方继续从 apply 取在场类型;定义在 types.ts 与名册展示共用。
 export type { NpcPresence } from './types';
@@ -168,14 +169,73 @@ function cleanSceneOpList(v: unknown): SceneOp[] {
   return arr(v).map(cleanSceneOp).filter((x): x is SceneOp => !!x);
 }
 
-function cleanNpcDelta(raw: unknown): NpcDelta | null {
+/**
+ * 清洗伤情局部补丁。replace 条目必须带合法片段编号(c1/c2…);text 允许空字符串(=删除该片段);
+ * add 条目必须有非空 text。evidence 仅作解析校验,入库前剥离。
+ */
+function cleanConditionPatchOp(raw: unknown, requireId: boolean): ConditionPatchOp | null {
+  if (!isRecord(raw)) return null;
+  const id = typeof raw.id === 'string' ? raw.id.trim() : '';
+  if (requireId && !/^c\d+$/i.test(id)) return null;
+  const text = typeof raw.text === 'string' ? raw.text.trim() : '';
+  if (!requireId && !text) return null;
+  const out: ConditionPatchOp = { text };
+  if (requireId) out.id = id.toLowerCase();
+  return out;
+}
+
+function cleanConditionPatch(raw: unknown): ConditionPatch | undefined {
+  if (!isRecord(raw)) return undefined;
+  const replace = arr(raw.replace).map(x => cleanConditionPatchOp(x, true)).filter((x): x is ConditionPatchOp => !!x);
+  const add = arr(raw.add).map(x => cleanConditionPatchOp(x, false)).filter((x): x is ConditionPatchOp => !!x);
+  if (!replace.length && !add.length) return undefined;
+  const out: ConditionPatch = {};
+  if (replace.length) out.replace = replace;
+  if (add.length) out.add = add;
+  return out;
+}
+
+/**
+ * 定位证据校验(仅内置提示词启用)。
+ *
+ * 新协议要求:给 NPC 写非空 location 时必须同对象附 locationEvidence(本轮正文连续短句)。
+ * 这里在正式解析路径(finalizeDelta)校验:证据缺失或不在这轮正文里 → 丢弃该次定位。
+ *  - 自定义模板不产出该字段,故只在「内置摘要模板生效」时 enforce,避免误删老模板的地点更新;
+ *  - 历史重放(cleanStoredDelta)不校验;
+ *  - 证据「仅校验,不存档」,不写入持久化 delta。
+ */
+export interface LocationEvidenceGuard {
+  content: string;
+  enforce: boolean;
+}
+
+/** 证据是否可核:优先原样子串匹配;容忍空白差异;过短(单字/标点)不算有效定位短句。 */
+function evidenceMatches(content: string, quote: string): boolean {
+  const q = quote.replace(/\s+/g, '');
+  if (q.length < 4) return false;
+  if (content.includes(quote)) return true;
+  return content.replace(/\s+/g, '').includes(q);
+}
+
+function cleanNpcDelta(raw: unknown, guard?: LocationEvidenceGuard): NpcDelta | null {
   if (!isRecord(raw)) {
     const name = scalarText(raw);
     return name ? { name } : null;
   }
   const name = namedText(raw, ['name', 'npc', 'id']);
   if (!name) return null;
-  return {
+  const conditionPatch = cleanConditionPatch(raw.conditionPatch);
+  const location = patchText(raw.location);
+  // 非空 location 必须有可核对的本轮原文证据(仅内置提示词启用;空串=清除,不需证据)。
+  let keptLocation = location;
+  if (guard?.enforce && typeof location === 'string' && location.trim()) {
+    const quote = optText(raw.locationEvidence) ?? '';
+    if (!quote || !evidenceMatches(guard.content, quote)) {
+      console.warn(`[柏宝书] NPC「${name}」的 location「${location}」缺少可核对的本轮原文证据,已丢弃该定位`);
+      keptLocation = undefined;
+    }
+  }
+  const out: NpcDelta = {
     name,
     gender: optText(raw.gender),
     age: optText(raw.age),
@@ -196,12 +256,15 @@ function cleanNpcDelta(raw: unknown): NpcDelta | null {
     follow: optBool(raw.follow),
     // 同 outfit/condition 的补丁语义:省略=保持旧值,空字符串=明确清空(离场且去向未明 → 所在不明)。
     // 此前用 optText 会把空串洗成 undefined,导致 AI 无法清掉旧地点、离场后仍被判为在场。
-    location: patchText(raw.location),
+    location: keptLocation,
   };
+  if (conditionPatch) out.conditionPatch = conditionPatch;
+  // locationEvidence 仅在上面用于校验,不进入持久化 delta。
+  return out;
 }
 
-function cleanNpcList(v: unknown): NpcDelta[] {
-  return arr(v).map(cleanNpcDelta).filter((x): x is NpcDelta => !!x);
+function cleanNpcList(v: unknown, guard?: LocationEvidenceGuard): NpcDelta[] {
+  return arr(v).map(x => cleanNpcDelta(x, guard)).filter((x): x is NpcDelta => !!x);
 }
 
 /**
@@ -275,6 +338,8 @@ function cleanProtagonistDelta(raw: unknown): ProtagonistDelta | null {
     const value = patchText(raw[key]);
     if (value !== undefined) out[key] = value;
   }
+  const conditionPatch = cleanConditionPatch(raw.conditionPatch);
+  if (conditionPatch) out.conditionPatch = conditionPatch;
   return Object.keys(out).length ? out : null;
 }
 
@@ -312,6 +377,23 @@ function cleanStoredPlanResolve(raw: unknown): PlanResolveItem | null {
 
 function cleanStoredPlanResolveList(v: unknown): PlanResolveItem[] {
   return arr(v).map(cleanStoredPlanResolve).filter((x): x is PlanResolveItem => !!x);
+}
+
+/** 清洗改期/暂缓项(StoredDelta 里 id 已是稳定 plan id)。content/targetTime 至少给一个。 */
+function cleanStoredPlanUpdate(raw: unknown): PlanUpdateItem | null {
+  if (!isRecord(raw)) return null;
+  const id = namedText(raw, ['id', 'planId', 'ref']);
+  if (!id) return null;
+  const out: PlanUpdateItem = { id };
+  const content = optText(raw.content);
+  if (content) out.content = content;
+  if (raw.targetTime !== undefined) out.targetTime = typeof raw.targetTime === 'string' ? raw.targetTime.trim() : '';
+  if (out.content === undefined && out.targetTime === undefined) return null;
+  return out;
+}
+
+function cleanStoredPlanUpdateList(v: unknown): PlanUpdateItem[] {
+  return arr(v).map(cleanStoredPlanUpdate).filter((x): x is PlanUpdateItem => !!x);
 }
 
 function cleanStoredDelta(raw: StoredDelta): StoredDelta {
@@ -369,10 +451,12 @@ function cleanStoredDelta(raw: StoredDelta): StoredDelta {
     const plans: NonNullable<StoredDelta['plans']> = {};
     const add = cleanPlanAddList(raw.plans.add);
     const resolve = cleanStoredPlanResolveList(raw.plans.resolve);
+    const update = cleanStoredPlanUpdateList(raw.plans.update);
     const remove = cleanTextList(raw.plans.remove, ['id', 'planId']);
     const reopen = cleanTextList(raw.plans.reopen, ['id', 'planId']);
     if (add.length) plans.add = add;
     if (resolve.length) plans.resolve = resolve;
+    if (update.length) plans.update = update;
     if (remove.length) plans.remove = remove;
     if (reopen.length) plans.reopen = reopen;
     if (Object.keys(plans).length) out.plans = plans;
@@ -755,6 +839,10 @@ function applyNpcPlacement(n: { follow?: boolean; location?: string }, src: NpcD
 function applyNpcState(n: { outfit?: string; condition?: string; important?: boolean }, src: NpcDelta): void {
   if (typeof src.outfit === 'string') n.outfit = src.outfit.trim() || undefined;
   if (typeof src.condition === 'string') n.condition = src.condition.trim() || undefined;
+  // 伤情局部更新:未列入 replace 的旧片段保留,不会自动回血。
+  if (src.conditionPatch && hasConditionPatchContent(src.conditionPatch)) {
+    n.condition = applyConditionPatch(n.condition, src.conditionPatch);
+  }
   if (typeof src.important === 'boolean') n.important = src.important || undefined;
 }
 
@@ -778,6 +866,10 @@ function applyAge(n: { age?: string; ageTime?: string }, src: { age?: string; ag
 function applyProtagonistState(target: BaibaiMemory['protagonist'], src: ProtagonistDelta, storyTime: string): void {
   for (const key of ['gender', 'identity', 'appearance', 'outfit', 'condition'] as const) {
     if (typeof src[key] === 'string') target[key] = src[key]!.trim() || undefined;
+  }
+  // 伤情局部更新:已有非空伤情时模型改用 conditionPatch,只改指定片段。
+  if (src.conditionPatch && hasConditionPatchContent(src.conditionPatch)) {
+    target.condition = applyConditionPatch(target.condition, src.conditionPatch);
   }
   applyAge(target, src, storyTime);
 }
@@ -1364,6 +1456,13 @@ function applyStoredDeltaTo(mem: BaibaiMemory, d: StoredDelta, leaf: { id: strin
         }
       }
     }
+    // 改期/暂缓:只整体更新仍存在事项的 content/targetTime;targetTime 空串=撤销旧期限而新期未定
+    for (const u of d.plans.update ?? []) {
+      const p = mem.plans.find(x => x.id === u.id);
+      if (!p) continue;
+      if (typeof u.content === 'string' && u.content.trim()) p.content = u.content.trim();
+      if (u.targetTime !== undefined) p.targetTime = u.targetTime.trim() || undefined;
+    }
     for (const pid of d.plans.reopen ?? []) {
       const p = mem.plans.find(x => x.id === pid);
       if (p) {
@@ -1580,15 +1679,14 @@ function parseShortRef(ref: string): number | null {
  * 把 AI 返回的 SummaryDelta 固化成可持久化的 StoredDelta。
  * 关键:plans.resolve 的运行期短序号(p1/p2…)按 openPlansOrdered 翻译成**稳定 plan id**。
  */
-export function finalizeDelta(delta: SummaryDelta, openPlansOrdered: { id: string }[], lifeDetailsOrdered: { id: string }[] = []): StoredDelta {
+export function finalizeDelta(delta: SummaryDelta, openPlansOrdered: { id: string }[], lifeDetailsOrdered: { id: string }[] = [], guard?: LocationEvidenceGuard): StoredDelta {
   const out: StoredDelta = {};
   const time = optText(delta.time);
   const location = optText(delta.location);
   if (time) out.time = time;
   if (location) out.location = location;
-  // 权威定位路径:规范化后非空才固化(只有给了 location 才有意义,但不强制——手动场景可单独给)
-  const lp = cleanPath(delta.locationPath);
-  if (lp.length) out.locationPath = lp;
+  // 权威定位路径:AI 显式给 [] 表示「无法对应已知节点」→ 清除旧锚点,而不是保留旧归属。
+  if (delta.locationPath !== undefined) out.locationPath = cleanPath(delta.locationPath);
   const sceneFocus = cleanSceneFocus(delta.sceneFocus);
   if (sceneFocus !== undefined) out.sceneFocus = sceneFocus;
   const protagonist = cleanProtagonistDelta(delta.protagonist);
@@ -1620,8 +1718,8 @@ export function finalizeDelta(delta: SummaryDelta, openPlansOrdered: { id: strin
   if (isRecord(delta.npcs)) {
     // 规范化:add/update 必须有名字才保留(无名 NPC 不记)
     const npcs: NonNullable<StoredDelta['npcs']> = {};
-    const add = cleanNpcList(delta.npcs.add);
-    const update = cleanNpcList(delta.npcs.update);
+    const add = cleanNpcList(delta.npcs.add, guard);
+    const update = cleanNpcList(delta.npcs.update, guard);
     const remove = cleanTextList(delta.npcs.remove, ['name', 'npc', 'id']);
     if (add.length) npcs.add = add;
     if (update.length) npcs.update = update;
@@ -1653,6 +1751,25 @@ export function finalizeDelta(delta: SummaryDelta, openPlansOrdered: { id: strin
         }
       }
       if (out.length) plans.resolve = out;
+    }
+    if (arr(delta.plans.update).length) {
+      // 短序号 p1/p2… 按 openPlansOrdered 翻译成稳定 id;content/targetTime 至少给一个
+      const out: PlanUpdateItem[] = [];
+      for (const ref of arr(delta.plans.update)) {
+        if (!isRecord(ref)) continue;
+        const shortRef = namedText(ref, ['id', 'ref', 'planId']);
+        const n = parseShortRef(shortRef);
+        if (n === null) continue;
+        const target = openPlansOrdered[n - 1];
+        if (!target) continue;
+        const entry: PlanUpdateItem = { id: target.id };
+        const content = optText(ref.content);
+        if (content) entry.content = content;
+        if (ref.targetTime !== undefined) entry.targetTime = typeof ref.targetTime === 'string' ? ref.targetTime.trim() : '';
+        if (entry.content === undefined && entry.targetTime === undefined) continue;
+        out.push(entry);
+      }
+      if (out.length) plans.update = out;
     }
     if (Object.keys(plans).length) out.plans = plans;
   }

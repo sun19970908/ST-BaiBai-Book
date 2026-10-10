@@ -1,5 +1,5 @@
 /**
- * 从旧版 Horae 迁移记忆数据。
+ * 从 Horae 迁移记忆数据。
  *
  * 关键事实:Horae 与柏宝书共用**同一批聊天文件的同一批消息对象**——Horae 把数据挂在
  * `chat[i].horae_meta`,柏宝书挂在 `chat[i].extra.bbs_leaf`,两者并存于同一条 msg 上。

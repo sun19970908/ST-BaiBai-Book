@@ -28,12 +28,6 @@ export interface ApiChannel {
   timeoutSec: number;
   /** 流式传输(默认关);开启后按 SSE 增量拼接 */
   stream: boolean;
-  /**
-   * 发送预填充(默认开)。摘要/批量请求末尾带一条 assistant 预填充消息,引导模型从思维链续写、
-   * 并压制拒答。Claude 等原生支持预填充的后端收益明显;若端点要求「最后一条必须是 user」
-   * 或为纯 OpenAI 端点(预填充不被续写、形同浪费),可关掉——关掉只是不发那条尾 assistant,
-   * 思维链引导仍由 system 检查清单承担,不影响功能。 */
-  prefill: boolean;
   /** 排除参数:这些字段名会在构造请求体时从 body 中删除,
    *  用于规避不接受某些参数(如 temperature/max_tokens)的兼容端点报错。 */
   excludeParams: string[];
@@ -125,8 +119,6 @@ export interface VectorSettings {
   rerank: VectorEndpoint;
   /** 查询重写端点;url 留空复用 embedding */
   queryRewrite: VectorEndpoint;
-  /** 查询重写请求是否置顶注入破限提示词(system;取自「自定义提示词 · 破限」,留空则用内置默认)。默认关。 */
-  queryRewriteJailbreak: boolean;
   /** 查询重写单次最大输出 token(三角色里仅它生成文本;够放 INTENT + 多条 Q 即可,偏小会截断)。默认 8192。 */
   queryRewriteMaxTokens: number;
   /** 召回参数(候选数/阈值/条数) */
@@ -354,7 +346,6 @@ function defaults(): ApiSettings {
       embedding: { url: 'https://api.siliconflow.cn/v1', key: '', model: 'Qwen/Qwen3-Embedding-8B', timeoutSec: 10, retries: 1 },
       rerank: { url: '', key: '', model: 'Qwen/Qwen3-Reranker-4B', timeoutSec: 20, retries: 1 },
       queryRewrite: { url: '', key: '', model: 'Qwen/Qwen3.5-27B', timeoutSec: 90, retries: 1 },
-      queryRewriteJailbreak: false,
       queryRewriteMaxTokens: 8192,
       recall: {
         injectionDepth: DEFAULT_RECALL_INJECTION_DEPTH,
@@ -477,9 +468,6 @@ function normalize(raw: unknown): ApiSettings {
     Number.isFinite(merged.vector.recall.minAiFloors) && merged.vector.recall.minAiFloors >= 0
       ? Math.floor(merged.vector.recall.minAiFloors)
       : 0;
-  // 查询重写破限开关:布尔,缺失(老数据无此键)回退 false(默认不注入)
-  merged.vector.queryRewriteJailbreak =
-    typeof merged.vector.queryRewriteJailbreak === 'boolean' ? merged.vector.queryRewriteJailbreak : false;
   // 查询重写最大输出 token:正整数,下限 256(太小会截断 INTENT/Q),缺失/非法回退默认 8192
   merged.vector.queryRewriteMaxTokens =
     Number.isFinite(merged.vector.queryRewriteMaxTokens) && merged.vector.queryRewriteMaxTokens >= 256
@@ -596,7 +584,6 @@ function normalizeChannel(c: Partial<ApiChannel>): ApiChannel {
         ? Math.floor(c.timeoutSec)
         : 180,
     stream: typeof c.stream === 'boolean' ? c.stream : false,
-    prefill: typeof c.prefill === 'boolean' ? c.prefill : true, // 后加字段:老数据默认开(保持原行为)
     excludeParams: Array.isArray(c.excludeParams)
       ? c.excludeParams.filter((x): x is string => typeof x === 'string')
       : [],
@@ -969,7 +956,6 @@ export function newChannel(): ApiChannel {
     maxTokens: 65535,
     timeoutSec: 180,
     stream: false,
-    prefill: true,
     excludeParams: [],
     reasoningEffort: '',
   };
