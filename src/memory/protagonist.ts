@@ -15,5 +15,12 @@ export function mergeProtagonistDelta(
   if (Object.prototype.hasOwnProperty.call(patch, 'age') && !Object.prototype.hasOwnProperty.call(patch, 'ageTime')) {
     delete merged.ageTime;
   }
+  // condition 是覆盖型文本。本次补丁一旦给出 condition(含空串=清空),同叶子残留的片段补丁
+  // 就必须一并作废——否则重放会先写入新文本、再按旧编号施加一遍补丁,手动保存看着「没生效」
+  // 且旧片段总被 add/replace 回来(越长越长)。补丁在前、condition 在后的合并顺序无法解决,
+  // 只能在这里显式删除。
+  if (Object.prototype.hasOwnProperty.call(patch, 'condition')) {
+    delete merged.conditionPatch;
+  }
   return merged;
 }

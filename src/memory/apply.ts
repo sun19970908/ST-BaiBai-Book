@@ -2130,8 +2130,10 @@ export function editNpc(
   const prev = memory.npcs.find(n => n.id === npcId(oldName));
   const follow = patch.follow !== undefined ? patch.follow : prev?.follow;
   const location = patch.location !== undefined ? patch.location.trim() : (prev?.location ?? '');
-  const outfit = patch.outfit !== undefined ? (patch.outfit.trim() || undefined) : prev?.outfit;
-  const condition = patch.condition !== undefined ? (patch.condition.trim() || undefined) : prev?.condition;
+  // 即时层(outfit/condition)是覆盖型快照:空字符串=明确清空,与 AI 端的 patchText 语义一致。
+  // 旧逻辑把空串洗成 undefined,重放时 applyNpcState 只认 string,于是「清空状态/脱下着装」永远不生效。
+  const outfit = patch.outfit !== undefined ? patch.outfit.trim() : prev?.outfit;
+  const condition = patch.condition !== undefined ? patch.condition.trim() : prev?.condition;
   const important = patch.important !== undefined ? patch.important : prev?.important;
 
   // 年龄:值没变(或未提供)时必须连旧锚点一起带上,否则重放会把锚点错误刷新到本叶子时间(等于冻龄);

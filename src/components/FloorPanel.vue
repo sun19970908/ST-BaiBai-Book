@@ -25,7 +25,7 @@ import { getLeaf, leafValid, deleteLeafAt, editLeafFull, planContentById, descri
 import { engineState, floorBackfillState, regenerateFloor, setFloorOmit, summarizeFloor } from '@/memory/engine';
 import { derivedMeta } from '@/memory/store';
 import { ui } from '@/state/ui';
-import type { LeafExtra, StoredDelta, ItemDelta, NpcDelta, VarOp, JsonValue } from '@/memory/types';
+import type { LeafExtra, StoredDelta, ItemDelta, NpcDelta, ProtagonistDelta, VarOp, JsonValue } from '@/memory/types';
 
 const props = defineProps<{ floor: number; sig: { tick: number } }>();
 
@@ -174,7 +174,8 @@ const npcTags = computed<Tag[]>(() => {
 const protagonistTags = computed<Tag[]>(() => {
   const protagonist = d.value?.protagonist;
   if (!protagonist) return [];
-  const labels: Record<keyof typeof protagonist, string> = {
+  // conditionPatch 不是文本字段(对象),不进标签流;用 Partial 只列要展示的文本键。
+  const labels: Partial<Record<keyof ProtagonistDelta, string>> = {
     gender: '性别',
     age: '年龄',
     ageTime: '年龄锚点',
@@ -183,7 +184,7 @@ const protagonistTags = computed<Tag[]>(() => {
     outfit: '着装',
     condition: '状态',
   };
-  const parts = (Object.keys(labels) as Array<keyof typeof protagonist>)
+  const parts = (Object.keys(labels) as Array<keyof ProtagonistDelta>)
     .filter(key => protagonist[key] !== undefined)
     .map(key => `${labels[key]}:${protagonist[key] || '(清空)'}`);
   if (!parts.length) return [];
